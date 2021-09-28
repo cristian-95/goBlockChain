@@ -3,14 +3,21 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"io"
+	"log"
+	"net/http"
+	"os"
 	"time"
+
+	"github.com/gorilla/mux"
 )
 
 // Tipo Block: cada bloco contem dados que serão escritos no blockchain
 type Block struct {
 	Index     int    // posição do dado escrito no blockchain
 	Timestamp string // o horario em que o dado é escrito
-	BPM       int    // batidas de coração por minuto,neste caso a informação aser gravada
+	BPM       int    // batidas de coração por minuto,neste caso a informação a ser gravada
 	Hash      string // Hash é um identificador SHA256 que representa a gravação dos dados
 	PrevHash  string // identificador que representa a gravação anterior
 }
@@ -56,6 +63,40 @@ func ReplaceChain(newBlocks []Block) {
 	if len(newBlocks) > len(BlockChain) {
 		BlockChain = newBlocks
 	}
+}
+
+func handleGetBlockchain(w http.ResponseWriter, r *http.Request) {
+	bytes, err := json.MarshalIndent(BlockChain, "", " ")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	io.WriteString(w, string(bytes))
+}
+
+func makeMuxRouter() http.Handler {
+	muxRouter := mux.NewRouter()
+	muxRouter.HandleFunc("/", handleGetBlockchain).Methods("GET")
+	muxRouter.HandleFunc("/", handleWriteBlock).Methods("POST")
+	return muxRouter
+}
+
+func run() error {
+	mux := makeMuxRouter()
+	httpAddr := os.Getenv("ADDR")
+	log.Println("listening on", os.Getenv("ADDR"))
+	s := &http.Server{
+		Addr:           ":" + httpAddr,
+		Handler:        mux,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
+	if err := s.ListenAndServe(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func main() {
