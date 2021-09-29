@@ -8,9 +8,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 )
 
 // Tipo Block: cada bloco contem dados que serão escritos no blockchain
@@ -81,10 +84,49 @@ func makeMuxRouter() http.Handler {
 	return muxRouter
 }
 
+type Message struct {
+	BPM int
+}
+
+func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
+	var m Message
+
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&m); err != nil {
+		respondWithJSON(w, r, http.StatusBadRequest, r.Body)
+		return
+	}
+	defer r.Body.Close()
+
+	newBlock, err := gennerateBlock(BlockChain[len(BlockChain)-1], m.BPM)
+	if err != nil {
+		respondWithJSON(w, r, http.StatusInternalServerError, m)
+		return
+	}
+	if isBlockValid(newBlock, BlockChain[len(BlockChain)-1]) {
+		newBlockchain := append(BlockChain, newBlock)
+		ReplaceChain(newBlockchain)
+		spew.Dump(BlockChain)
+	}
+
+	respondWithJSON(w, r, http.StatusCreated, newBlock)
+}
+
+func respondWithJSON(w http.ResponseWriter, r *http.Request, code int, payload interface{}) {
+	response, err := json.MarshalIndent(payload, "", " ")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("HTTP 500: Intertal Server Error"))
+	}
+
+	w.WriteHeader(code)
+	w.Write(response)
+}
+
 func run() error {
 	mux := makeMuxRouter()
-	httpAddr := os.Getenv("ADDR")
-	log.Println("listening on", os.Getenv("ADDR"))
+	httpAddr := os.Getenv("PORT")
+	log.Println("listening on", os.Getenv("PORT"))
 	s := &http.Server{
 		Addr:           ":" + httpAddr,
 		Handler:        mux,
@@ -99,6 +141,23 @@ func run() error {
 	return nil
 }
 
+var mutex = &sync.Mutex{}
+
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	go func() {
+		t := time.Now()
+		genesisBlock := Block{0, t.String(), 0, "", ""}
+		spew.Dump(genesisBlock)
+
+		mutex.Lock()
+		BlockChain = append(BlockChain, genesisBlock)
+		mutex.Unlock()
+	}()
+	log.Fatal(run())
 
 }
