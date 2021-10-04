@@ -25,6 +25,10 @@ type Block struct {
 	PrevHash  string // identificador que representa a gravação anterior
 }
 
+type Message struct {
+	BPM int
+}
+
 var BlockChain []Block
 
 func calculateHash(block Block) string {
@@ -82,10 +86,6 @@ func makeMuxRouter() http.Handler {
 	muxRouter.HandleFunc("/", handleGetBlockchain).Methods("GET")
 	muxRouter.HandleFunc("/", handleWriteBlock).Methods("POST")
 	return muxRouter
-}
-
-type Message struct {
-	BPM int
 }
 
 func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
@@ -159,5 +159,4 @@ func main() {
 		mutex.Unlock()
 	}()
 	log.Fatal(run())
-
 }
