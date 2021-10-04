@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"math"
+	"math/big"
 	"net/http"
 	"os"
 	"sync"
@@ -16,20 +18,26 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var maxNonce = math.MaxInt64
+
+const targetBits = 24
+
 // Tipo Block: cada bloco contem dados que serão escritos no blockchain
 type Block struct {
-	Index     int    // posição do dado escrito no blockchain
-	Timestamp string // o horario em que o dado é escrito
-	BPM       int    // batidas de coração por minuto,neste caso a informação a ser gravada
+	Timestamp int64  // o horario em que o dado é escrito
+	Data      []byte // batidas de coração por minuto,neste caso a informação a ser gravada
 	Hash      string // Hash é um identificador SHA256 que representa a gravação dos dados
 	PrevHash  string // identificador que representa a gravação anterior
+	Nonce     int
+}
+type Blockchain struct {
+	blocks []*Block
 }
 
-type Message struct {
-	BPM int
+type ProofOfWork struct {
+	block  *Block
+	target *big.Int
 }
-
-var BlockChain []Block
 
 func calculateHash(block Block) string {
 	record := string(block.Index) + block.Timestamp + string(block.BPM) + block.PrevHash
