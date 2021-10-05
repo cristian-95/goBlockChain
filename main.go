@@ -1,162 +1,153 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"io"
+	"encoding/binary"
+	"fmt"
 	"log"
-	"net/http"
-	"os"
-	"sync"
+	"math"
+	"math/big"
+	"strconv"
 	"time"
-
-	"github.com/davecgh/go-spew/spew"
-	"github.com/gorilla/mux"
-	"github.com/joho/godotenv"
 )
 
-// Tipo Block: cada bloco contem dados que serão escritos no blockchain
+var maxNonce = math.MaxInt64
+
+const targetBits = 24
+
 type Block struct {
-	Index     int    // posição do dado escrito no blockchain
-	Timestamp string // o horario em que o dado é escrito
-	BPM       int    // batidas de coração por minuto,neste caso a informação a ser gravada
-	Hash      string // Hash é um identificador SHA256 que representa a gravação dos dados
-	PrevHash  string // identificador que representa a gravação anterior
+	Timestamp     int64
+	Data          []byte
+	PrevBlockHash []byte
+	Hash          []byte
+	Nonce         int
 }
 
-type Message struct {
-	BPM int
+type ProofOfWork struct {
+	block  *Block
+	target *big.Int
 }
 
-var BlockChain []Block
-
-func calculateHash(block Block) string {
-	record := string(block.Index) + block.Timestamp + string(block.BPM) + block.PrevHash
-	h := sha256.New()
-	h.Write([]byte(record))
-	hashed := h.Sum(nil)
-	return hex.EncodeToString(hashed)
-}
-
-func gennerateBlock(oldBlock Block, BPM int) (Block, error) {
-	var newBlock Block
-	t := time.Now()
-
-	newBlock.Index = oldBlock.Index + 1
-	newBlock.Timestamp = t.String()
-	newBlock.BPM = BPM
-	newBlock.PrevHash = oldBlock.Hash
-	newBlock.Hash = calculateHash(newBlock)
-
-	return newBlock, nil
-}
-
-func isBlockValid(newBlock, oldBlock Block) bool {
-	if oldBlock.Index+1 != newBlock.Index {
-		return false
+func NewBlock(data string, prevBlockHash []byte) *Block {
+	block := &Block{
+		Timestamp:     time.Now().Unix(),
+		Data:          []byte(data),
+		PrevBlockHash: prevBlockHash,
+		Hash:          []byte{},
+		Nonce:         0,
 	}
-	if oldBlock.Hash != newBlock.PrevHash {
-		return false
-	}
-	if calculateHash(newBlock) != newBlock.Hash {
-		return false
-	}
+	pow := NewProofOfWork(block)
+	nonce, hash := pow.Run()
+	block.Hash = hash[:]
+	block.Nonce = nonce
 
-	return true
+	return block
 }
 
-func ReplaceChain(newBlocks []Block) {
-	if len(newBlocks) > len(BlockChain) {
-		BlockChain = newBlocks
-	}
+func NewProofOfWork(b *Block) *ProofOfWork {
+	target := big.NewInt(1)
+	target.Lsh(target, uint(256-targetBits))
+
+	pow := &ProofOfWork{b, target}
+
+	return pow
 }
 
-func handleGetBlockchain(w http.ResponseWriter, r *http.Request) {
-	bytes, err := json.MarshalIndent(BlockChain, "", " ")
+func (pow *ProofOfWork) prepareData(nonce int) []byte {
+	data := bytes.Join(
+		[][]byte{
+			pow.block.PrevBlockHash,
+			pow.block.Data,
+			IntToHex(pow.block.Timestamp),
+			IntToHex(int64(targetBits)),
+			IntToHex(int64(nonce)),
+		},
+		[]byte{},
+	)
+	return data
+}
+
+func (pow *ProofOfWork) Run() (int, []byte) {
+	var hashInt big.Int
+	var hash [32]byte
+
+	nonce := 0
+
+	fmt.Printf("Mining the block containing \"%s\"\n", pow.block.Data)
+
+	for nonce < maxNonce {
+		data := pow.prepareData(nonce)
+		hash = sha256.Sum256(data)
+		fmt.Printf("\r%x", hash)
+		hashInt.SetBytes(hash[:])
+
+		if hashInt.Cmp(pow.target) == -1 {
+			break
+		} else {
+			nonce++
+		}
+	}
+	fmt.Print("\n\n")
+	return nonce, hash[:]
+}
+
+func (pow *ProofOfWork) Validate() bool {
+	var hashInt big.Int
+
+	data := pow.prepareData(pow.block.Nonce)
+	hash := sha256.Sum256(data)
+	hashInt.SetBytes(hash[:])
+
+	isValid := hashInt.Cmp(pow.target) == -1
+
+	return isValid
+}
+
+// IntToHex converts an int64 to a byte array
+func IntToHex(num int64) []byte {
+	buff := new(bytes.Buffer)
+	err := binary.Write(buff, binary.BigEndian, num)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		log.Panic(err)
 	}
-	io.WriteString(w, string(bytes))
+
+	return buff.Bytes()
 }
 
-func makeMuxRouter() http.Handler {
-	muxRouter := mux.NewRouter()
-	muxRouter.HandleFunc("/", handleGetBlockchain).Methods("GET")
-	muxRouter.HandleFunc("/", handleWriteBlock).Methods("POST")
-	return muxRouter
+type Blockchain struct {
+	blocks []*Block
 }
 
-func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
-	var m Message
-
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&m); err != nil {
-		respondWithJSON(w, r, http.StatusBadRequest, r.Body)
-		return
-	}
-	defer r.Body.Close()
-
-	newBlock, err := gennerateBlock(BlockChain[len(BlockChain)-1], m.BPM)
-	if err != nil {
-		respondWithJSON(w, r, http.StatusInternalServerError, m)
-		return
-	}
-	if isBlockValid(newBlock, BlockChain[len(BlockChain)-1]) {
-		newBlockchain := append(BlockChain, newBlock)
-		ReplaceChain(newBlockchain)
-		spew.Dump(BlockChain)
-	}
-
-	respondWithJSON(w, r, http.StatusCreated, newBlock)
+func NewBlockchain() *Blockchain {
+	return &Blockchain{[]*Block{NewGenesisBlock()}}
 }
 
-func respondWithJSON(w http.ResponseWriter, r *http.Request, code int, payload interface{}) {
-	response, err := json.MarshalIndent(payload, "", " ")
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("HTTP 500: Intertal Server Error"))
-	}
-
-	w.WriteHeader(code)
-	w.Write(response)
+func NewGenesisBlock() *Block {
+	return NewBlock("Genesis Block", []byte{})
 }
 
-func run() error {
-	mux := makeMuxRouter()
-	httpAddr := os.Getenv("PORT")
-	log.Println("listening on", os.Getenv("PORT"))
-	s := &http.Server{
-		Addr:           ":" + httpAddr,
-		Handler:        mux,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		MaxHeaderBytes: 1 << 20,
-	}
-
-	if err := s.ListenAndServe(); err != nil {
-		return err
-	}
-	return nil
+func (bc *Blockchain) AddBlock(data string) {
+	prevBlock := bc.blocks[len(bc.blocks)-1]
+	newBlock := NewBlock(data, prevBlock.Hash)
+	bc.blocks = append(bc.blocks, newBlock)
 }
-
-var mutex = &sync.Mutex{}
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal(err)
+	bc := NewBlockchain()
+
+	bc.AddBlock("send 1 BTC to Ivan")
+	bc.AddBlock("Send 1 BTC to Ivan")
+	bc.AddBlock("Send 2 more BTC to Ivan")
+
+	for _, block := range bc.blocks {
+		fmt.Printf("Prev. hash: %x\n", block.PrevBlockHash)
+		fmt.Printf("Data: %s\n", block.Data)
+		fmt.Printf("Hash: %x\n", block.Hash)
+
+		pow := NewProofOfWork(block)
+		fmt.Printf("PoW: %s\n", strconv.FormatBool(pow.Validate()))
+
+		fmt.Println()
 	}
-
-	go func() {
-		t := time.Now()
-		genesisBlock := Block{0, t.String(), 0, "", ""}
-		spew.Dump(genesisBlock)
-
-		mutex.Lock()
-		BlockChain = append(BlockChain, genesisBlock)
-		mutex.Unlock()
-	}()
-	log.Fatal(run())
 }
