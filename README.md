@@ -10,6 +10,6 @@ Conceitos básicos sobre blockchain seguindo este tutorial:
 
 ## to-do
 
-- [ ]persistência
+- persistência
 
-- [ ]CLI
+- CLI
